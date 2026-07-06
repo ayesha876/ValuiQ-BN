@@ -36,12 +36,15 @@ async function register(req, res, next) {
 async function verifyEmail(req, res, next) {
   try {
     const { email, otp } = req.body;
-    const { user, alreadyVerified } = await authService.verifyEmail({ email, otp });
+    const { user, alreadyVerified, token } = await authService.verifyEmail({ email, otp });
 
     return res.status(200).json({
       success: true,
       message: alreadyVerified ? 'Email is already verified.' : 'Email verified successfully.',
-      data: { user },
+      // Fresh verification returns a login token so the client can go straight to
+      // the dashboard. On the already-verified path `token` is undefined and JSON
+      // omits it, so that response is unchanged (still just { user }).
+      data: { token, user },
     });
   } catch (err) {
     return next(err);
@@ -136,12 +139,13 @@ async function verifyResetOtp(req, res, next) {
 async function resetPassword(req, res, next) {
   try {
     const { resetToken, newPassword } = req.body;
-    const { user } = await authService.resetPassword({ resetToken, newPassword });
+    const { user, token } = await authService.resetPassword({ resetToken, newPassword });
 
     return res.status(200).json({
       success: true,
       message: 'Password updated successfully.',
-      data: { user },
+      // Auto-login after a successful reset / first-time "Set Password".
+      data: { token, user },
     });
   } catch (err) {
     return next(err);

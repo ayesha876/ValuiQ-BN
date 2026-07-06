@@ -157,7 +157,13 @@ async function verifyEmail({ email, otp }) {
   user.lastOtpSentAt = undefined;
   user.expiresAt = undefined;
   const saved = await repo.save(user);
-  return { user: saved, alreadyVerified: false };
+
+  // OTP proven → this IS the authentication event, so issue the login session
+  // token here (reuses signLoginToken). Carries BOTH Flow A and Flow B users
+  // straight to the dashboard. NOTE: only the fresh-verification path mints a
+  // token — the already-verified branch above returns no token, unchanged.
+  const token = signLoginToken(saved);
+  return { user: saved, alreadyVerified: false, token };
 }
 
 /**
@@ -384,7 +390,11 @@ async function resetPassword({ resetToken, newPassword }) {
   user.lastResetOtpSentAt = undefined;
   const saved = await repo.save(user);
 
-  return { user: saved };
+  // Mirror of verify-email: the reset OTP already proved ownership, so auto-login
+  // the user (reuses signLoginToken) instead of forcing a separate manual login
+  // after a returning passwordless user uses "Set Password".
+  const token = signLoginToken(saved);
+  return { user: saved, token };
 }
 
 module.exports = {
