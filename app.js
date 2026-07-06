@@ -19,8 +19,26 @@ const app = express();
 // Security-related HTTP headers (sane defaults).
 app.use(helmet());
 
-// Let the frontend (its origin comes from .env) call this API from the browser.
-app.use(cors({ origin: config.clientUrl, credentials: true }));
+// Let the frontend call this API from the browser. CLIENT_URL may be a single
+// origin or a comma-separated list (e.g. the Vite dev server on :5173 and its
+// automatic :5174 fallback, plus a staging URL later). Requests with no Origin
+// header (curl, Postman, server-to-server, health checks) are allowed through.
+// `credentials: true` permits cookies/Authorization headers on cross-origin
+// calls — and requires an explicit origin (never '*'), which the allowlist gives.
+const allowedOrigins = config.clientUrl
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
+    credentials: true,
+  }),
+);
 
 // Parse incoming JSON bodies into req.body.
 app.use(express.json());
