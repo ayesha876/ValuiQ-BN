@@ -69,4 +69,16 @@ function verifyResetToken(token) {
   return payload;
 }
 
-module.exports = { signLoginToken, signResetToken, verifyResetToken };
+/**
+ * Verify a LOGIN token. Returns the decoded payload if the token is genuine and
+ * unexpired; THROWS otherwise (bad signature / expired). Checked against the LOGIN
+ * secret only, so a reset token handed in here can never pass. The auth middleware
+ * turns any throw into a 401.
+ * @param {string} token
+ * @returns {{ sub: string, role: string }}
+ */
+function verifyLoginToken(token) {
+  return jwt.verify(token, config.jwt.secret);
+}
+
+module.exports = { signLoginToken, verifyLoginToken, signResetToken, verifyResetToken };

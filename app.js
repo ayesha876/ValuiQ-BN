@@ -11,6 +11,7 @@ const morgan = require('morgan');
 
 const config = require('./src/shared/config/env');
 const authRoutes = require('./src/modules/auth/auth.routes');
+const eventRoutes = require('./src/modules/events/event.routes');
 const errorHandler = require('./src/shared/middlewares/errorHandler.middleware');
 const AppError = require('./src/shared/utils/errors');
 
@@ -40,8 +41,9 @@ app.use(
   }),
 );
 
-// Parse incoming JSON bodies into req.body.
-app.use(express.json());
+// Parse incoming JSON bodies into req.body. The size cap is a cheap DoS guard —
+// event/auth payloads are small JSON, so 16kb is generous but bounds abuse.
+app.use(express.json({ limit: '16kb' }));
 
 // Concise request logs — dev only, to keep production logs clean.
 if (!config.isProduction) app.use(morgan('dev'));
@@ -53,6 +55,9 @@ app.get('/api/health', (req, res) => {
 
 // Auth feature routes (register / verify-email / resend-otp / set-password).
 app.use('/api/auth', authRoutes);
+
+// Event Management routes (create / list / get / update).
+app.use('/api/events', eventRoutes);
 
 // Anything that reached here matched no route above -> 404 through our handler.
 app.use((req, res, next) => {
