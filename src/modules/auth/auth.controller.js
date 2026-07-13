@@ -67,11 +67,11 @@ async function resendOtp(req, res, next) {
   }
 }
 
-// POST /api/auth/set-password  — body: { email, password }
+// POST /api/auth/set-password  — body: { password }; identity from the auth token
 async function setPassword(req, res, next) {
   try {
-    const { email, password } = req.body;
-    const { user } = await authService.setPassword({ email, password });
+    const { password } = req.body;
+    const { user } = await authService.setPassword({ userId: req.user.id, password });
 
     return res.status(200).json({
       success: true,

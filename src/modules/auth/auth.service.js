@@ -201,11 +201,17 @@ async function resendOtp({ email }) {
  * check; the 8-char minimum is re-enforced on the backend via the route validator.
  * @returns {{ user }}
  */
-async function setPassword({ email, password }) {
-  const user = await repo.findByEmailWithPassword(email);
-  if (!user) throw new AppError(404, 'No account found for this email.');
+async function setPassword({ userId, password }) {
+  const user = await repo.findByIdWithPassword(userId);
+  if (!user) throw new AppError(401, 'Please log in again.');
   if (!user.isVerified) {
     throw new AppError(403, 'Please verify your email before setting a password.');
+  }
+
+  // First-time only: a user who already has a password must go through the reset
+  // chain (Forgot Password). This path must NEVER overwrite an existing password.
+  if (user.hasPassword) {
+    throw new AppError(403, 'Password already set. Use Forgot Password to change it.');
   }
 
   // NOTE: future place for a password strength / breach-history check. For MVP
