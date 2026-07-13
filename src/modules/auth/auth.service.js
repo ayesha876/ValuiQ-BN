@@ -26,6 +26,11 @@ const RESEND_COOLDOWN_MS = 30 * 1000; // min gap between resend requests
 const RESET_OTP_TTL_MS = config.resetOtpExpiryMinutes * 60 * 1000;
 const RESET_RESEND_COOLDOWN_MS = 30 * 1000; // min gap between reset-OTP sends
 
+// Max consecutive WRONG OTP guesses allowed against a single code before it is
+// BURNED (cleared) and the user must request a fresh one. Stops a 6-digit code
+// from being brute-forced. Applies identically to verify-email and verify-reset-otp.
+const MAX_OTP_ATTEMPTS = 5;
+
 // The ONE neutral reply forgot-password ever gives, whether or not the email
 // exists. Identical wording + status in both cases is what stops an attacker from
 // discovering which emails are registered (email-enumeration).
@@ -45,6 +50,8 @@ function issueOtp() {
     otp: generateOtp(),
     otpExpiry: new Date(now + OTP_TTL_MS),
     lastOtpSentAt: new Date(now),
+    // A fresh code always starts with a clean guess counter.
+    otpAttempts: 0,
   };
 }
 
@@ -96,7 +103,7 @@ async function register({ email, role }) {
     throw new AppError(409, 'Email already registered.');
   }
 
-  const { otp, otpExpiry, lastOtpSentAt } = issueOtp();
+  const { otp, otpExpiry, lastOtpSentAt, otpAttempts } = issueOtp();
   let user;
   let resent = false;
 
@@ -106,6 +113,7 @@ async function register({ email, role }) {
     existing.role = role;
     existing.otp = otp;
     existing.otpExpiry = otpExpiry;
+    existing.otpAttempts = otpAttempts; // fresh code → clean guess counter
     existing.lastOtpSentAt = lastOtpSentAt;
     existing.expiresAt = new Date(Date.now() + GHOST_TTL_MS);
     user = await repo.save(existing);
@@ -118,6 +126,7 @@ async function register({ email, role }) {
       hasPassword: false,
       otp,
       otpExpiry,
+      otpAttempts,
       lastOtpSentAt,
       expiresAt: new Date(Date.now() + GHOST_TTL_MS),
     });
@@ -146,6 +155,17 @@ async function verifyEmail({ email, otp }) {
     throw new AppError(400, 'Code expired, please request a new one.');
   }
   if (user.otp !== otp) {
+    // Wrong guess: count it, and once too many pile up BURN the code (clear it)
+    // so a 6-digit OTP can't be brute-forced — the user must request a new one.
+    user.otpAttempts = (user.otpAttempts || 0) + 1;
+    if (user.otpAttempts >= MAX_OTP_ATTEMPTS) {
+      user.otp = undefined;
+      user.otpExpiry = undefined;
+      user.otpAttempts = 0;
+      await repo.save(user);
+      throw new AppError(400, 'Too many incorrect attempts. Please request a new code.');
+    }
+    await repo.save(user);
     throw new AppError(400, 'Invalid code.');
   }
 
@@ -154,6 +174,7 @@ async function verifyEmail({ email, otp }) {
   user.isVerified = true;
   user.otp = undefined;
   user.otpExpiry = undefined;
+  user.otpAttempts = 0;
   user.lastOtpSentAt = undefined;
   user.expiresAt = undefined;
   const saved = await repo.save(user);
@@ -184,9 +205,10 @@ async function resendOtp({ email }) {
     }
   }
 
-  const { otp, otpExpiry, lastOtpSentAt } = issueOtp();
+  const { otp, otpExpiry, lastOtpSentAt, otpAttempts } = issueOtp();
   user.otp = otp;
   user.otpExpiry = otpExpiry;
+  user.otpAttempts = otpAttempts; // fresh code → clean guess counter
   user.lastOtpSentAt = lastOtpSentAt;
   user.expiresAt = new Date(Date.now() + GHOST_TTL_MS); // refresh cleanup window
   await repo.save(user);
@@ -303,6 +325,7 @@ async function forgotPassword({ email }) {
   const now = Date.now();
   user.resetOtp = generateOtp();
   user.resetOtpExpiry = new Date(now + RESET_OTP_TTL_MS);
+  user.resetOtpAttempts = 0; // fresh code → clean guess counter
   user.lastResetOtpSentAt = new Date(now);
   await repo.save(user);
 
@@ -331,6 +354,17 @@ async function verifyResetOtp({ email, otp }) {
     throw new AppError(400, 'Code expired, request a new one.');
   }
   if (user.resetOtp !== otp) {
+    // Wrong guess: count it, and once too many pile up BURN the reset code so it
+    // can't be brute-forced into a reset token — the user must request a new one.
+    user.resetOtpAttempts = (user.resetOtpAttempts || 0) + 1;
+    if (user.resetOtpAttempts >= MAX_OTP_ATTEMPTS) {
+      user.resetOtp = undefined;
+      user.resetOtpExpiry = undefined;
+      user.resetOtpAttempts = 0;
+      await repo.save(user);
+      throw new AppError(400, 'Too many incorrect attempts. Please request a new code.');
+    }
+    await repo.save(user);
     throw new AppError(400, 'Invalid code.');
   }
 
@@ -339,6 +373,7 @@ async function verifyResetOtp({ email, otp }) {
   const resetToken = signResetToken(user);
   user.resetOtp = undefined;
   user.resetOtpExpiry = undefined;
+  user.resetOtpAttempts = 0;
   user.lastResetOtpSentAt = undefined;
   await repo.save(user);
 

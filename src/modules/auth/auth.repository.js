@@ -21,7 +21,7 @@ function findByEmail(email) {
 
 // Same lookup but ALSO pulls the normally-hidden OTP fields, for verification.
 function findByEmailWithOtp(email) {
-  return User.findOne({ email }).select('+otp +otpExpiry +lastOtpSentAt');
+  return User.findOne({ email }).select('+otp +otpExpiry +otpAttempts +lastOtpSentAt');
 }
 
 // Same lookup but ALSO pulls the hidden password, for the set-password step and
@@ -33,7 +33,9 @@ function findByEmailWithPassword(email) {
 // Pull the hidden RESET-OTP fields for the forgot-password / verify-reset-otp
 // steps (the code, its expiry, and the last-sent time for the resend cooldown).
 function findByEmailWithResetOtp(email) {
-  return User.findOne({ email }).select('+resetOtp +resetOtpExpiry +lastResetOtpSentAt');
+  return User.findOne({ email }).select(
+    '+resetOtp +resetOtpExpiry +resetOtpAttempts +lastResetOtpSentAt',
+  );
 }
 
 // Load a user by id, WITH the hidden password. Used by reset-password: the caller

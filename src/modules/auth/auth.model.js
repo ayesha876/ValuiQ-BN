@@ -59,6 +59,11 @@ const userSchema = new mongoose.Schema(
     otp: { type: String, select: false },
     otpExpiry: { type: Date, select: false },
 
+    // Counts consecutive WRONG verify-email attempts against the current code.
+    // Once it hits the max the code is burned (cleared) so a 6-digit OTP can't be
+    // brute-forced; reset to 0 whenever a fresh code is issued or on success.
+    otpAttempts: { type: Number, default: 0, select: false },
+
     // Powers the simple "don't resend too fast" guard. Hidden from responses.
     lastOtpSentAt: { type: Date, select: false },
 
@@ -70,6 +75,10 @@ const userSchema = new mongoose.Schema(
     // is verified so it can't be reused.
     resetOtp: { type: String, select: false },
     resetOtpExpiry: { type: Date, select: false },
+
+    // Mirror of otpAttempts for the reset flow: counts consecutive WRONG
+    // verify-reset-otp attempts and burns the reset code once the max is hit.
+    resetOtpAttempts: { type: Number, default: 0, select: false },
 
     // Powers the reset-OTP resend cooldown (mirror of lastOtpSentAt, but for the
     // reset flow). Hidden from responses.
@@ -115,9 +124,11 @@ userSchema.set('toJSON', {
     delete ret.password;
     delete ret.otp;
     delete ret.otpExpiry;
+    delete ret.otpAttempts;
     delete ret.lastOtpSentAt;
     delete ret.resetOtp;
     delete ret.resetOtpExpiry;
+    delete ret.resetOtpAttempts;
     delete ret.lastResetOtpSentAt;
     return ret;
   },

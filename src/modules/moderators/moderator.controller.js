@@ -12,14 +12,22 @@ const moderatorService = require('./moderator.service');
 
 // POST /api/events/:eventId/moderators/invite
 async function invite(req, res) {
-  const { invite: created, resent } = await moderatorService.inviteModerator({
+  const { invite: created, resent, delivered } = await moderatorService.inviteModerator({
     event: req.event,
     email: req.validated.email,
     inviter: req.user,
   });
+  // The invite row is always saved; a failed email is non-fatal (still 201) — we
+  // just tell the host it's pending delivery instead of implying it was sent.
+  let message;
+  if (!delivered) {
+    message = 'Invitation created — email delivery pending.';
+  } else {
+    message = resent ? 'Invitation re-sent.' : 'Invitation sent.';
+  }
   return res.status(201).json({
     success: true,
-    message: resent ? 'Invitation re-sent.' : 'Invitation sent.',
+    message,
     // Never return the token — only safe, useful fields.
     data: {
       invite: {

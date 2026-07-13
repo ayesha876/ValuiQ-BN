@@ -33,9 +33,11 @@ function issueInviteToken() {
 
 /**
  * "Send" the invite. In development we ALSO print the accept link to the console so
- * the flow is testable with no real inbox. A send failure is fatal in production but
- * non-fatal in dev (the console link is enough) — mirrors auth's deliverOtp. Called
- * AFTER the invite row is saved, so a failed send always leaves a recoverable record.
+ * the flow is testable with no real inbox. Called AFTER the invite row is saved, so
+ * a send failure is NEVER fatal (the row is already recoverable): we log it and
+ * report back whether delivery actually happened, so the caller can tell the host
+ * the invite exists but the email is delayed rather than failing the whole request.
+ * @returns {{ delivered: boolean }}
  */
 async function deliverInvite({ email, rawToken, eventName }) {
   const inviteUrl = `${clientOrigin()}/accept-invite?token=${rawToken}`;
@@ -44,9 +46,11 @@ async function deliverInvite({ email, rawToken, eventName }) {
   }
   try {
     await sendInviteEmail({ to: email, inviteUrl, eventName, expiryDays: INVITE_TTL_DAYS });
+    return { delivered: true };
   } catch (err) {
-    if (config.isProduction) throw err;
-    console.warn('[mailer] Dev invite send failed — use the console link above:', err.message);
+    // Post-save delivery failure is best-effort: log it and keep the saved invite.
+    console.warn('[mailer] Invite email send failed — the invite is saved and pending:', err.message);
+    return { delivered: false };
   }
 }
 
@@ -88,18 +92,32 @@ async function inviteModerator({ event, email, inviter }) {
     invite = await repo.save(pending);
     resent = true;
   } else {
-    invite = await repo.createInvite({
-      event: event.id,
-      email,
-      tokenHash,
-      invitedBy: inviter.id,
-      expiresAt: new Date(Date.now() + INVITE_TTL_MS),
-    });
+    try {
+      invite = await repo.createInvite({
+        event: event.id,
+        email,
+        tokenHash,
+        invitedBy: inviter.id,
+        expiresAt: new Date(Date.now() + INVITE_TTL_MS),
+      });
+    } catch (err) {
+      // Lost the race with a concurrent invite for the same {event,email}: both
+      // requests found no pending row, then both tried to create one, and the
+      // partial-unique {event,email,status:'pending'} index rejected the second.
+      // Surface an invite-appropriate 409 here so it never reaches the shared
+      // errorHandler, whose generic 11000 message ("Email already registered.")
+      // is nonsensical for an invitation. (Mirrors createEvent's slug-race catch.)
+      if (err.code === 11000) {
+        throw new AppError(409, 'An invitation is already pending for this email.');
+      }
+      throw err;
+    }
   }
 
-  // Record saved -> now send (a failed send leaves the row recoverable).
-  await deliverInvite({ email, rawToken: raw, eventName: event.name });
-  return { invite, resent };
+  // Record saved -> now send. Delivery is best-effort: a failed send leaves the
+  // row recoverable, and `delivered` lets the caller tell the host it's pending.
+  const { delivered } = await deliverInvite({ email, rawToken: raw, eventName: event.name });
+  return { invite, resent, delivered };
 }
 
 /**
