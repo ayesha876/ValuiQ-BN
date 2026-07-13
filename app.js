@@ -12,6 +12,10 @@ const morgan = require('morgan');
 const config = require('./src/shared/config/env');
 const authRoutes = require('./src/modules/auth/auth.routes');
 const eventRoutes = require('./src/modules/events/event.routes');
+const {
+  eventModeratorRoutes,
+  moderatorRoutes,
+} = require('./src/modules/moderators/moderator.routes');
 const errorHandler = require('./src/shared/middlewares/errorHandler.middleware');
 const AppError = require('./src/shared/utils/errors');
 
@@ -56,8 +60,16 @@ app.get('/api/health', (req, res) => {
 // Auth feature routes (register / verify-email / resend-otp / set-password).
 app.use('/api/auth', authRoutes);
 
+// Moderator invite/accept. The event-scoped router is mounted BEFORE /api/events so
+// the events router's auth/role middleware doesn't pre-run on /moderators paths. It
+// can't shadow event CRUD — it requires the literal `/moderators` segment after the id.
+app.use('/api/events/:eventId/moderators', eventModeratorRoutes);
+
 // Event Management routes (create / list / get / update).
 app.use('/api/events', eventRoutes);
+
+// Standalone moderator routes (accept).
+app.use('/api/moderators', moderatorRoutes);
 
 // Anything that reached here matched no route above -> 404 through our handler.
 app.use((req, res, next) => {

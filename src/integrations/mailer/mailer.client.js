@@ -14,6 +14,7 @@ const nodemailer = require('nodemailer');
 const config = require('./../../shared/config/env');
 const verificationEmail = require('./templates/verificationEmail');
 const resetPasswordEmail = require('./templates/resetPasswordEmail');
+const inviteEmail = require('./templates/inviteEmail');
 
 // We build the transporter once and reuse it (creating one per email is wasteful
 // and, for Ethereal, would hit the network every time). Cached as a PROMISE
@@ -102,4 +103,28 @@ async function sendResetPasswordEmail({ to, otp }) {
   return info;
 }
 
-module.exports = { sendVerificationEmail, sendResetPasswordEmail };
+/**
+ * Sends the moderator-invite email containing the accept link. Same behaviour and
+ * error contract as the others — throws if sending fails, and the SERVICE decides
+ * whether that's fatal: the invite record is created FIRST, so a failed send leaves
+ * a recoverable row, and in dev the accept link is also logged to the console.
+ */
+async function sendInviteEmail({ to, inviteUrl, eventName, expiryDays, inviterName }) {
+  const { subject, text, html } = inviteEmail({ eventName, inviteUrl, expiryDays, inviterName });
+
+  const transporter = await getTransporter();
+  const info = await transporter.sendMail({
+    from: config.email.from,
+    to,
+    subject,
+    text,
+    html,
+  });
+
+  const preview = nodemailer.getTestMessageUrl(info);
+  if (preview) console.log('[mailer] Preview the email here:', preview);
+
+  return info;
+}
+
+module.exports = { sendVerificationEmail, sendResetPasswordEmail, sendInviteEmail };

@@ -43,6 +43,12 @@ function findByIdWithPassword(id) {
   return User.findById(id).select('+password');
 }
 
+// Load a user by id with only the default (public) fields — no hidden password/OTP.
+// Used where only public fields are needed, e.g. the moderator-accept email match.
+function findById(id) {
+  return User.findById(id);
+}
+
 // Persist changes made to a user document we already loaded (runs pre-save
 // hooks, e.g. password hashing).
 function save(userDoc) {
@@ -56,5 +62,6 @@ module.exports = {
   findByEmailWithPassword,
   findByEmailWithResetOtp,
   findByIdWithPassword,
+  findById,
   save,
 };
