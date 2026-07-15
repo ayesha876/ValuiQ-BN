@@ -8,6 +8,9 @@
 const crypto = require('crypto');
 const AppError = require('../../shared/utils/errors');
 const repo = require('./event.repository');
+// moderator.service only depends on event.repository (never event.service), so this
+// import is one-directional — no circular dependency.
+const moderatorService = require('../moderators/moderator.service');
 
 // System words a custom slug may NOT use — they'd collide with app routes or read
 // as an official page. Checked for BOTH custom and auto-generated slugs.
@@ -80,6 +83,20 @@ function assertGoLiveReady(data) {
   }
 }
 
+// After an event is persisted, mirror any create/edit-form moderator rows (the
+// embedded `moderators` array) into the invite system so they appear in the host's
+// Moderators view as PENDING. Best-effort: the sync itself already isolates each
+// moderator, and this extra guard means even a total failure never undoes a
+// successfully-saved event. No-op when there are no moderators.
+async function bridgeFormModeratorsToInvites({ event, moderators, inviter }) {
+  if (!moderators?.length) return;
+  try {
+    await moderatorService.syncFormModeratorsToInvites({ event, moderators, inviter });
+  } catch (err) {
+    console.warn('[events] Moderator invite sync failed (event still saved):', err.message);
+  }
+}
+
 // --- use cases (one per endpoint) ---------------------------------------
 
 /**
@@ -104,8 +121,9 @@ async function createEvent({ user, data }) {
     if (await repo.existsBySlug(requestedSlug)) {
       throw new AppError(409, 'This link is already taken. Choose another.');
     }
+    let created;
     try {
-      return await repo.create({ ...fields, owner: user.id, slug: requestedSlug, status });
+      created = await repo.create({ ...fields, owner: user.id, slug: requestedSlug, status });
     } catch (err) {
       // Lost the race between the check and the insert -> still a clear 409.
       if (err.code === 11000) {
@@ -113,18 +131,24 @@ async function createEvent({ user, data }) {
       }
       throw err;
     }
+    await bridgeFormModeratorsToInvites({ event: created, moderators: fields.moderators, inviter: user });
+    return created;
   }
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     // eslint-disable-next-line no-await-in-loop
     const slug = await generateUniqueSlug(fields.name);
+    let created;
     try {
       // eslint-disable-next-line no-await-in-loop
-      return await repo.create({ ...fields, owner: user.id, slug, status });
+      created = await repo.create({ ...fields, owner: user.id, slug, status });
     } catch (err) {
       if (err.code === 11000 && attempt < 2) continue; // slug race — try again
       throw err;
     }
+    // eslint-disable-next-line no-await-in-loop
+    await bridgeFormModeratorsToInvites({ event: created, moderators: fields.moderators, inviter: user });
+    return created;
   }
   // Unreachable in practice (loop returns or throws), but satisfies the linter.
   throw new AppError(500, 'Could not create event. Please try again.');
@@ -183,7 +207,11 @@ async function updateEvent({ user, id, data }) {
     event.status = 'draft';
   }
 
-  return repo.save(event);
+  const saved = await repo.save(event);
+  // Only bridge when this update actually carried moderator rows (undefined = the
+  // caller didn't touch moderators, so there's nothing to sync).
+  await bridgeFormModeratorsToInvites({ event: saved, moderators: data.moderators, inviter: user });
+  return saved;
 }
 
 /** SOFT DELETE — ownership-checked; only draft or ended events; keeps the doc so

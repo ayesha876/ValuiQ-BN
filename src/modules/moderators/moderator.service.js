@@ -63,7 +63,7 @@ async function deliverInvite({ email, rawToken, eventName }) {
  * - otherwise                                -> create a new pending invite
  * @returns {{ invite, resent: boolean }}
  */
-async function inviteModerator({ event, email, inviter }) {
+async function inviteModerator({ event, email, inviter, resendIfPending = true }) {
   // One lookup answers both "is this me?" and "are they already in?".
   const invitee = await authRepo.findByEmail(email);
   if (invitee) {
@@ -84,6 +84,15 @@ async function inviteModerator({ event, email, inviter }) {
   // Resend path: refresh the SAME pending row (new token + fresh window) so the
   // partial-unique {event,email} guard is never violated by a second row.
   const pending = await repo.findPendingInvite({ eventId: event.id, email });
+
+  // Bridge path (resendIfPending:false, used by syncFormModeratorsToInvites): an invite
+  // is already pending for this {event,email}, so there is nothing to do — do NOT refresh
+  // the token or re-send the email. This makes re-saving a form's moderators a safe no-op
+  // for anyone already invited. The /invite endpoint keeps the default (resend).
+  if (pending && !resendIfPending) {
+    return { invite: pending, resent: false, delivered: false, skipped: true };
+  }
+
   let invite;
   let resent = false;
   if (pending) {
@@ -118,6 +127,38 @@ async function inviteModerator({ event, email, inviter }) {
   // row recoverable, and `delivered` lets the caller tell the host it's pending.
   const { delivered } = await deliverInvite({ email, rawToken: raw, eventName: event.name });
   return { invite, resent, delivered };
+}
+
+/**
+ * SYNC FORM MODERATORS -> PENDING INVITES — the bridge for the create/edit form's
+ * embedded `moderators` rows. For each {email} it creates a PENDING invite through the
+ * SAME path a normal /invite uses, so create-form moderators show up in the host's
+ * Moderators view. Best-effort and idempotent:
+ *   - reuses inviteModerator with resendIfPending:false, so an email that already has a
+ *     pending invite is skipped (no duplicate row, no re-sent email) — safe to re-run on
+ *     every draft save.
+ *   - each moderator is isolated in its own try/catch: one problematic row (self-invite
+ *     400, already-active 409, email failure, race) is logged and skipped and NEVER fails
+ *     the event create/update that called this.
+ * This only ADDS invites; it does not revoke invites for rows removed from the form.
+ * @returns {{ created: number, skipped: number }}
+ */
+async function syncFormModeratorsToInvites({ event, moderators, inviter }) {
+  let created = 0;
+  let skipped = 0;
+  for (const { email } of moderators) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const result = await inviteModerator({ event, email, inviter, resendIfPending: false });
+      if (result.skipped) skipped += 1;
+      else created += 1;
+    } catch (err) {
+      // A single moderator problem must never fail the event operation.
+      skipped += 1;
+      console.warn(`[moderators] Skipped form moderator invite for ${email}:`, err.message);
+    }
+  }
+  return { created, skipped };
 }
 
 /**
@@ -234,4 +275,11 @@ async function revokeMember({ event, memberId }) {
   return { id: member.id };
 }
 
-module.exports = { inviteModerator, listModerators, acceptInvite, revokeInvite, revokeMember };
+module.exports = {
+  inviteModerator,
+  syncFormModeratorsToInvites,
+  listModerators,
+  acceptInvite,
+  revokeInvite,
+  revokeMember,
+};
