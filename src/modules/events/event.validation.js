@@ -8,7 +8,7 @@
  * in through the body. The server sets those from trusted sources instead.
  */
 const { z } = require('zod');
-const { STATUSES } = require('./event.model'); // reuse the real enum (generic, not hardcoded)
+const { STATUSES, FEED_FORMATS } = require('./event.model'); // reuse the real enums (generic, not hardcoded)
 
 // Optional form fields often arrive as '' — treat that as "not provided" so a
 // half-filled draft validates instead of erroring on an empty string.
@@ -25,6 +25,33 @@ const moderatorSchema = z
   .object({
     name: z.string().trim().min(1, 'Moderator name is required.'),
     email: z.string().trim().toLowerCase().email('Enter a valid moderator email.'),
+  })
+  .strict();
+
+// One segmented round's INPUT shape — mirrors the Opening Segment (segment + pricing +
+// neglectTimer) plus a per-round shortlistSize. SHAPE ONLY (enum / int >= 0): the
+// segmented go-live rule (>= 1 round, each shortlistSize >= 1) lives in the service
+// beside assertGoLiveReady, not here. `.strict()` (incl. nested) blocks stray keys such
+// as an echoed `id`/`_id`.
+const roundInputSchema = z
+  .object({
+    segment: z
+      .object({
+        type: z.enum(['instant', 'hotlist']).optional(),
+        timeLimit: optionalNonNegInt, // minutes
+        submissionLimit: optionalNonNegInt, // N
+      })
+      .strict()
+      .optional(),
+    pricing: z
+      .object({
+        minPostCost: optionalNonNegInt,
+        minVoteCost: optionalNonNegInt,
+      })
+      .strict()
+      .optional(),
+    neglectTimer: optionalNonNegInt, // seconds
+    shortlistSize: optionalNonNegInt,
   })
   .strict();
 
@@ -54,6 +81,9 @@ const eventFields = {
   merchUrl: optionalUrl,
   moderators: z.array(moderatorSchema).optional(),
   discountCodes: z.array(z.string().trim().min(1)).optional(),
+  // Event format + segmented rounds. Shape-only; go-live rules are service-side.
+  feedFormat: z.enum(FEED_FORMATS).optional(),
+  rounds: z.array(roundInputSchema).max(10, 'A maximum of 10 rounds is allowed.').optional(),
 };
 
 // end >= start only matters when BOTH are present (a draft may have neither).

@@ -17,6 +17,10 @@ const STATUSES = ['draft', 'scheduled', 'live', 'ended'];
 // The two opening-segment delivery modes (mirrors the Create Event form).
 const SEGMENT_TYPES = ['instant', 'hotlist'];
 
+// Event-level feed format. `open` = the single Opening Segment is the whole event.
+// `segmented` = the Opening Segment is stage 0 and `rounds` are stages 1..n.
+const FEED_FORMATS = ['open', 'segmented'];
+
 // Embedded moderator row (name + email only) — matches the current Create Event
 // form's moderator rows. Real invites/accept are a later module; `_id: false`
 // keeps these rows lightweight since they're addressed by email, not id.
@@ -27,6 +31,36 @@ const moderatorSchema = new mongoose.Schema(
   },
   { _id: false },
 );
+
+// One segmented "round" (stage 1..n). Mirrors the Opening Segment's exact shape
+// (segment + pricing + neglectTimer) plus a per-round shortlistSize — so a "stage"
+// has one identical shape across the document. Subdocs KEEP their default `_id` so
+// each row is stably addressable; the API exposes it as `id` (see toJSON below), and
+// the frontend deliberately never echoes that id back so `.strict()` input stays clean.
+// Config-only today: nothing consumes rounds yet (no submissions/voting/shortlist engine).
+const roundSchema = new mongoose.Schema({
+  segment: {
+    type: { type: String, enum: SEGMENT_TYPES, default: 'instant' },
+    timeLimit: { type: Number, min: 0 }, // minutes
+    submissionLimit: { type: Number, min: 0 }, // N — max submissions
+  },
+  pricing: {
+    minPostCost: { type: Number, min: 0 },
+    minVoteCost: { type: Number, min: 0 },
+  },
+  neglectTimer: { type: Number, min: 0 }, // seconds
+  shortlistSize: { type: Number, min: 0 }, // the one genuinely new per-round field
+});
+
+// Mirror the parent doc's convention: expose `id`, hide `_id`/`__v` on each round.
+roundSchema.set('toJSON', {
+  transform(_doc, ret) {
+    ret.id = ret._id;
+    delete ret._id;
+    delete ret.__v;
+    return ret;
+  },
+});
 
 const eventSchema = new mongoose.Schema(
   {
@@ -71,6 +105,14 @@ const eventSchema = new mongoose.Schema(
     },
 
     neglectTimer: { type: Number, min: 0 }, // seconds a post waits before neglect
+
+    // --- Event format (open feed vs segmented rounds) ---
+    // `feedFormat` gates the two modes; `rounds` holds the segmented stages 1..n
+    // (the Opening Segment above stays as stage 0). Each round mirrors the opening
+    // shape + a per-round shortlistSize. Nothing reads rounds yet — config capture only.
+    feedFormat: { type: String, enum: FEED_FORMATS, default: 'open' },
+    rounds: { type: [roundSchema], default: [] },
+
     merchUrl: { type: String, trim: true, default: '' },
 
     moderators: { type: [moderatorSchema], default: [] },
@@ -103,3 +145,4 @@ const Event = mongoose.model('Event', eventSchema);
 module.exports = Event;
 module.exports.STATUSES = STATUSES;
 module.exports.SEGMENT_TYPES = SEGMENT_TYPES;
+module.exports.FEED_FORMATS = FEED_FORMATS;

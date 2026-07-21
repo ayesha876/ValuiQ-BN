@@ -83,6 +83,27 @@ function assertGoLiveReady(data) {
   }
 }
 
+// Segmented events need real rounds before going live. Kept SEPARATE from
+// assertGoLiveReady (which stays untouched) but called right beside it: a segmented
+// event must have >= 1 round and every round a shortlistSize >= 1. Open events skip
+// this entirely. Reads the same shape from a create payload or a loaded event doc.
+// Service-side by design — go-live rules live here (the assertGoLiveReady precedent),
+// not in Zod.
+function assertSegmentedReady(data) {
+  if (data.feedFormat !== 'segmented') return;
+  const rounds = data.rounds ?? [];
+  if (rounds.length < 1) {
+    throw new AppError(400, 'Cannot go live — a segmented event needs at least one round.');
+  }
+  const badIndex = rounds.findIndex((r) => r?.shortlistSize == null || r.shortlistSize < 1);
+  if (badIndex !== -1) {
+    throw new AppError(
+      400,
+      `Cannot go live — round ${badIndex + 1} needs a shortlist size of at least 1.`,
+    );
+  }
+}
+
 // After an event is persisted, mirror any create/edit-form moderator rows (the
 // embedded `moderators` array) into the invite system so they appear in the host's
 // Moderators view as PENDING. Best-effort: the sync itself already isolates each
@@ -111,7 +132,10 @@ async function bridgeFormModeratorsToInvites({ event, moderators, inviter }) {
  */
 async function createEvent({ user, data }) {
   const { intent = 'draft', slug: requestedSlug, ...fields } = data;
-  if (intent === 'live') assertGoLiveReady(fields);
+  if (intent === 'live') {
+    assertGoLiveReady(fields);
+    assertSegmentedReady(fields);
+  }
   const status = resolveStatus(intent, fields.startDate);
 
   if (requestedSlug) {
@@ -202,6 +226,7 @@ async function updateEvent({ user, id, data }) {
   // Status only changes on an explicit intent.
   if (intent === 'live') {
     assertGoLiveReady(event);
+    assertSegmentedReady(event);
     event.status = resolveStatus('live', event.startDate);
   } else if (intent === 'draft') {
     event.status = 'draft';
