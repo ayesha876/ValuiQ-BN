@@ -6,6 +6,7 @@ const http = require('node:http');
 
 const config = require('./src/shared/config/env');
 const connectDB = require('./src/shared/config/db');
+const { getAllowedOrigins } = require('./src/shared/config/corsOrigins');
 const app = require('./app');
 const { initSockets } = require('./src/sockets/socket');
 const { startFairnessTimer } = require('./src/jobs/workers/fairnessTimer.worker');
@@ -19,6 +20,28 @@ function assertRequiredConfig() {
     console.error(
       `\n[ValuiQ] Missing required env: ${missing.join(', ')}.\n` +
         'Set it in your .env file before starting.\n',
+    );
+    process.exit(1);
+  }
+
+  // PRODUCTION ONLY: a real deployment must know its frontend origin.
+  //
+  // corsOrigins.js already drops localhost in production, so a misconfigured
+  // FRONTEND_URL does not open a hole — it closes everything, and every browser call
+  // fails CORS. That is safe but almost impossible to diagnose from the frontend, where
+  // it reads as a network error. Refusing to start says it once, in the deploy log,
+  // where someone is already looking.
+  //
+  // This lives here rather than in app.js because only server.js knows this is a
+  // deployment: app.js is imported by the test suite, which legitimately runs with
+  // NODE_ENV=production and no frontend at all.
+  if (config.isProduction && getAllowedOrigins().length === 0) {
+    console.error(
+      '\n[ValuiQ] FRONTEND_URL is missing or only contains localhost origins, and ' +
+        'NODE_ENV=production.\n' +
+        'Set it to the deployed frontend origin, e.g.\n' +
+        '  FRONTEND_URL=https://your-app.vercel.app\n' +
+        '(No trailing slash. Comma-separate multiple origins.)\n',
     );
     process.exit(1);
   }
@@ -43,8 +66,11 @@ async function start() {
   // splitting the worker into its own process later is a deployment change, not a code one.
   const { worker } = startFairnessTimer();
 
-  httpServer.listen(config.port, () => {
-    console.log(`ValuiQ API listening on http://localhost:${config.port} [${config.nodeEnv}]`);
+  // The host argument is not optional on a container host: Render routes traffic to the
+  // container's external interface, and a server listening only on loopback fails its
+  // health check while logging a perfectly healthy "listening" line.
+  httpServer.listen(config.port, config.host, () => {
+    console.log(`ValuiQ API listening on ${config.host}:${config.port} [${config.nodeEnv}]`);
     console.log(`ValuiQ realtime attached on the same port (rooms: event:<id>, event:<id>:control)`);
     console.log(
       worker
