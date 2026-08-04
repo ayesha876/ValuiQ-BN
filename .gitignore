@@ -1,6 +1,8 @@
 node_modules/
 .env
 .env.local
+.env.production
+.env.production.local
 dist/
 build/
 *.log
@@ -8,3 +10,10 @@ build/
 coverage/
 .nyc_output/
 .vite/
+
+# Local editor / agent config — machine-specific, never part of the deployable app.
+.claude/
+.claude.json
+CLAUDE.md
+.vscode/
+.idea/
