@@ -17,7 +17,27 @@
  * multi-instance production deploy, plug in `rate-limit-redis` using the project's
  * existing ioredis/REDIS_URL and pass it as `store` below.
  */
-const { rateLimit } = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
+
+/**
+ * What counts as "one caller".
+ *
+ * PER USER when the request is authenticated, per IP otherwise.
+ *
+ * Per-IP alone is actively wrong for this product: at a live event the entire audience is
+ * behind the venue's wifi, so hundreds of attendees share one NAT address. A per-IP cap would
+ * throttle the whole room as though it were a single person hammering the API — and the more
+ * successful the event, the harder it would break.
+ *
+ * Unauthenticated routes (login, register, forgot-password) still key by IP, which is correct:
+ * there is no user yet, and brute-forcing credentials IS an per-origin attack.
+ *
+ * `ipKeyGenerator` rather than `req.ip` directly — it normalises IPv6 addresses to a subnet so
+ * a single client cannot trivially rotate through its own /64.
+ */
+function callerKey(req, res) {
+  return req.user?.id ? `user:${req.user.id}` : ipKeyGenerator(req, res);
+}
 
 /**
  * Build a rate-limiting middleware.
@@ -34,7 +54,9 @@ function rateLimiter({
 } = {}) {
   return rateLimit({
     windowMs,
-    limit: max, // requests allowed per IP per window before 429s begin
+    limit: max, // requests allowed per caller per window before 429s begin
+    // Per authenticated user where possible, per IP otherwise — see callerKey above.
+    keyGenerator: callerKey,
     // Send the modern, standard `RateLimit-*` headers; drop the legacy `X-*` ones.
     standardHeaders: 'draft-7',
     legacyHeaders: false,

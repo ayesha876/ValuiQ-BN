@@ -106,12 +106,41 @@ const eventSchema = new mongoose.Schema(
 
     neglectTimer: { type: Number, min: 0 }, // seconds a post waits before neglect
 
+    // --- SYSTEM-MANAGED: the host's cut of realised post value, as a percentage ------------
+    // What share of a post's money-value this host keeps when a decision books revenue. 100 =
+    // the host keeps everything the audience spent; anything lower is the platform's margin.
+    //
+    // NOT IN `event.validation.js`, and that omission is the design. The validation schemas
+    // are `.strict()`, so a field absent from them is rejected outright — which means a host
+    // cannot PATCH their own commercial terms to 100%. It belongs with `owner`, `status` and
+    // `slug` in the server-managed set: settable by an admin tool or a seed, never by the
+    // client that stands to gain from it.
+    //
+    // Per-event rather than global because the brief requires configurable splits, and deals
+    // genuinely differ by event. Default 100 preserves today's behaviour exactly.
+    revenueSharePct: { type: Number, min: 0, max: 100, default: 100 },
+
     // --- Event format (open feed vs segmented rounds) ---
     // `feedFormat` gates the two modes; `rounds` holds the segmented stages 1..n
     // (the Opening Segment above stays as stage 0). Each round mirrors the opening
     // shape + a per-round shortlistSize. Nothing reads rounds yet — config capture only.
     feedFormat: { type: String, enum: FEED_FORMATS, default: 'open' },
     rounds: { type: [roundSchema], default: [] },
+
+    // --- Live timing (server-owned) ---------------------------------------
+    // WHEN the clock started. `segment.timeLimit` says how long a stage lasts, but until now
+    // nothing recorded when it began — so the participation window the attendee screen counts
+    // down to was uncomputable. Set when the event goes live; null before that.
+    roundStartedAt: { type: Date, default: null },
+
+    // WHICH stage is live. 0 is the Opening Segment; 1..n index into `rounds`. The client is
+    // never allowed to work this out from elapsed time — it owns no more of the round than it
+    // owns of the ranking.
+    //
+    // ⚠️ Nothing ADVANCES this yet. Round advancement (closing a window, cutting the shortlist,
+    // opening the next stage) is a mechanism that does not exist in this codebase. The field
+    // gives it somewhere to write when it is built.
+    currentRoundIndex: { type: Number, default: 0, min: 0 },
 
     merchUrl: { type: String, trim: true, default: '' },
 

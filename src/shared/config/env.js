@@ -75,6 +75,41 @@ const config = {
     from: process.env.EMAIL_FROM || 'ValuiQ <no-reply@valuiq.com>',
   },
 
+  // --- Redis (Week 4: fairness timers + cross-instance pub/sub) ---
+  // NO DEFAULT, ON PURPOSE. Unset means "no Redis", which is a supported way to run this app:
+  // timers fall back to the database sweep and pub/sub falls back to in-process emit. A
+  // default of localhost:6379 would turn a missing config into a connection error storm on
+  // every machine that does not happen to be running Redis.
+  redisUrl: process.env.REDIS_URL,
+
+  // --- Fairness timer (Week 4 moderation) ---
+  fairness: {
+    // How long a post waits for a moderator before it is auto-neglected and everyone who
+    // staked on it is refunded.
+    //
+    // The DEADLINE ITSELF IS NOT HERE. It comes from the event's (or the round's)
+    // `neglectTimer`, in seconds, which the host sets per stage on the Create Event form and
+    // which is shown to attendees as an accountability commitment. A global timeout would
+    // silently override every host who configured one. This value is only the fallback for a
+    // stage that left it blank.
+    defaultTimerSeconds: Number(process.env.FAIRNESS_DEFAULT_TIMER_SECONDS) || 300,
+
+    // Ceiling on a host-configured timer. A host who types 999999 should not be able to pin
+    // an attendee's tokens for eleven days.
+    maxTimerSeconds: Number(process.env.FAIRNESS_MAX_TIMER_SECONDS) || 86_400,
+
+    // When to warn the control room that a post is about to time out, as a FRACTION of the
+    // post's own timer rather than a fixed lead time. The brief asked for "1 hour before",
+    // which cannot work here: neglect timers are seconds, commonly 30-300, so a fixed hour
+    // would fire before the post was even submitted. 0.8 = warn with 20% of the clock left.
+    warnAtElapsedFraction: Number(process.env.FAIRNESS_WARN_FRACTION) || 0.8,
+
+    // How often the safety-net sweep looks for overdue posts the queue never fired for.
+    // Independent of Redis — this is what makes auto-neglect inevitable rather than merely
+    // punctual. See fairnessTimer.worker.js.
+    sweepIntervalSeconds: Number(process.env.FAIRNESS_SWEEP_INTERVAL_SECONDS) || 60,
+  },
+
   // --- Client (used later for CORS / links in emails) ---
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
 };

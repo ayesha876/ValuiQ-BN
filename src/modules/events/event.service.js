@@ -137,6 +137,10 @@ async function createEvent({ user, data }) {
     assertSegmentedReady(fields);
   }
   const status = resolveStatus(intent, fields.startDate);
+  // Stamp when the clock started. The participation window is measured from this, not from
+  // startDate (which is when the event was SCHEDULED to begin — a late start would make every
+  // countdown wrong). Only 'live' starts a clock; 'scheduled' has not begun yet.
+  if (status === 'live') fields.roundStartedAt = new Date();
 
   if (requestedSlug) {
     if (isReservedSlug(requestedSlug)) {
@@ -228,6 +232,8 @@ async function updateEvent({ user, id, data }) {
     assertGoLiveReady(event);
     assertSegmentedReady(event);
     event.status = resolveStatus('live', event.startDate);
+    // Start the clock at the moment it actually goes live (see createEvent).
+    if (event.status === 'live') event.roundStartedAt = new Date();
   } else if (intent === 'draft') {
     event.status = 'draft';
   }
