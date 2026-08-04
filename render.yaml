@@ -1,0 +1,70 @@
+# Render Blueprint for the ValuiQ API.
+#
+# Render > New > Blueprint, point it at this repo, and it provisions the service below.
+# Every secret is `sync: false`, which means Render prompts for the value on first deploy
+# and stores it encrypted — nothing sensitive is ever written into this file.
+#
+# Note on the free plan: the instance sleeps after ~15 minutes without traffic, and the
+# in-process fairness worker sleeps with it. That is survivable by design — the database
+# sweep in src/jobs/workers/fairnessTimer.worker.js settles anything overdue on wake — but
+# it means neglect timers lose punctuality while idle. Pinging /health from an external
+# uptime monitor keeps the instance warm if that matters.
+
+services:
+  - type: web
+    name: valuiq-api
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+
+    # `npm ci` over `npm install`: it installs exactly what package-lock.json pins, so a
+    # deploy cannot silently pick up a different transitive version than the one tested.
+    buildCommand: npm ci
+    startCommand: npm start
+
+    # Render polls this to decide whether a deploy went live. It is mounted at the root in
+    # app.js, ahead of auth and the database, so it answers even while the app is busy.
+    healthCheckPath: /health
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # Pin the runtime so a future Render default bump cannot change it under us.
+      - key: NODE_VERSION
+        value: 22
+
+      # PORT is injected by Render — do not declare it here.
+
+      - key: MONGODB_URI
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: RESET_TOKEN_SECRET
+        sync: false
+      - key: RESET_TOKEN_EXPIRES_IN
+        value: 15m
+
+      # Upstash TCP endpoint (rediss://), not the REST URL — BullMQ and pub/sub need a
+      # real socket. Optional: leaving it unset degrades timers to the database sweep.
+      - key: REDIS_URL
+        sync: false
+
+      # Email: Resend first, SMTP as the fallback transport.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: 587
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
