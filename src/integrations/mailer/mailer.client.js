@@ -1,58 +1,26 @@
 /**
- * mailer.client.js — the ONE place that actually sends email (via Nodemailer).
+ * mailer.client.js — turns an application event into a message.
  *
- * Two modes, chosen automatically so you can test WITHOUT real SMTP:
- *   1. REAL SMTP  — used when EMAIL_HOST/USER/PASS are set in .env.
- *   2. ETHEREAL   — a free fake inbox Nodemailer creates on the fly (dev only).
- *                   Nothing is really delivered; instead we log a "preview URL"
- *                   where you can view the email in a browser.
+ * Each function here does one thing: pick the right template, fill it in, and hand the
+ * finished subject/text/html to sendEmail(). It no longer knows or cares which provider
+ * delivers it — that decision, and the Resend → SMTP → Ethereal fallback chain behind
+ * it, lives in sendEmail.js.
  *
- * Either way, the SERVICE also prints the OTP straight to the server console in
- * development, so you can verify the flow even with no inbox at all.
+ * The contract callers rely on is unchanged: these THROW when a message could not be
+ * sent by any transport. Every caller already treats that as non-fatal in development,
+ * because the OTP (and the invite link) are also logged to the console there.
  */
-const nodemailer = require('nodemailer');
 const config = require('./../../shared/config/env');
+const { sendEmail } = require('./sendEmail');
 const verificationEmail = require('./templates/verificationEmail');
 const resetPasswordEmail = require('./templates/resetPasswordEmail');
 const inviteEmail = require('./templates/inviteEmail');
 
-// We build the transporter once and reuse it (creating one per email is wasteful
-// and, for Ethereal, would hit the network every time). Cached as a PROMISE
-// because Ethereal setup is async.
-let transporterPromise = null;
-
-async function getTransporter() {
-  if (transporterPromise) return transporterPromise;
-
-  transporterPromise = (async () => {
-    // Mode 1: real SMTP from .env.
-    if (config.email.host && config.email.user && config.email.pass) {
-      return nodemailer.createTransport({
-        host: config.email.host,
-        port: config.email.port,
-        secure: config.email.port === 465, // 465 = implicit TLS
-        auth: { user: config.email.user, pass: config.email.pass },
-      });
-    }
-
-    // Mode 2: Ethereal test account (dev fallback, no real delivery).
-    const testAccount = await nodemailer.createTestAccount();
-    console.log('[mailer] No SMTP configured — using Ethereal test inbox.');
-    return nodemailer.createTransport({
-      host: 'smtp.ethereal.email',
-      port: 587,
-      secure: false,
-      auth: { user: testAccount.user, pass: testAccount.pass },
-    });
-  })();
-
-  return transporterPromise;
-}
-
 /**
  * Sends the verification email containing the OTP.
- * Throws if sending fails — the caller decides whether that's fatal (in dev the
- * service treats a send failure as non-fatal because the OTP is also logged).
+ *
+ * @param {{to: string, otp: string}} params Recipient and the one-time code.
+ * @returns {Promise<{provider: string, id?: string}>} Which transport delivered it.
  */
 async function sendVerificationEmail({ to, otp }) {
   const { subject, text, html } = verificationEmail({
@@ -60,27 +28,16 @@ async function sendVerificationEmail({ to, otp }) {
     expiryMinutes: config.otpExpiryMinutes,
   });
 
-  const transporter = await getTransporter();
-  const info = await transporter.sendMail({
-    from: config.email.from,
-    to,
-    subject,
-    text,
-    html,
-  });
-
-  // For the Ethereal fallback, this prints a clickable URL to view the email.
-  const preview = nodemailer.getTestMessageUrl(info);
-  if (preview) console.log('[mailer] Preview the email here:', preview);
-
-  return info;
+  return sendEmail({ to, subject, text, html });
 }
 
 /**
- * Sends the password-reset email containing the reset OTP. Same behaviour and
- * error contract as sendVerificationEmail — throws if sending fails, and the
- * service decides whether that's fatal (in dev it isn't, because the OTP is also
- * logged to the console).
+ * Sends the password-reset email containing the reset OTP. Deliberately separate from
+ * the verification mail above: the two flows have different copy and different expiry
+ * windows, and merging them would couple a change in one to a regression in the other.
+ *
+ * @param {{to: string, otp: string}} params Recipient and the one-time code.
+ * @returns {Promise<{provider: string, id?: string}>} Which transport delivered it.
  */
 async function sendResetPasswordEmail({ to, otp }) {
   const { subject, text, html } = resetPasswordEmail({
@@ -88,43 +45,27 @@ async function sendResetPasswordEmail({ to, otp }) {
     expiryMinutes: config.resetOtpExpiryMinutes,
   });
 
-  const transporter = await getTransporter();
-  const info = await transporter.sendMail({
-    from: config.email.from,
-    to,
-    subject,
-    text,
-    html,
-  });
-
-  const preview = nodemailer.getTestMessageUrl(info);
-  if (preview) console.log('[mailer] Preview the email here:', preview);
-
-  return info;
+  return sendEmail({ to, subject, text, html });
 }
 
 /**
- * Sends the moderator-invite email containing the accept link. Same behaviour and
- * error contract as the others — throws if sending fails, and the SERVICE decides
- * whether that's fatal: the invite record is created FIRST, so a failed send leaves
- * a recoverable row, and in dev the accept link is also logged to the console.
+ * Sends the moderator-invite email containing the accept link.
+ *
+ * The invite record is created BEFORE this is called, so a failed send leaves a
+ * recoverable row rather than a moderator who was never invited.
+ *
+ * @param {object} params
+ * @param {string} params.to Recipient address.
+ * @param {string} params.inviteUrl Absolute accept link (built from FRONTEND_URL).
+ * @param {string} params.eventName Event the invite is for.
+ * @param {number} params.expiryDays How long the link stays valid.
+ * @param {string} params.inviterName Who sent it.
+ * @returns {Promise<{provider: string, id?: string}>} Which transport delivered it.
  */
 async function sendInviteEmail({ to, inviteUrl, eventName, expiryDays, inviterName }) {
   const { subject, text, html } = inviteEmail({ eventName, inviteUrl, expiryDays, inviterName });
 
-  const transporter = await getTransporter();
-  const info = await transporter.sendMail({
-    from: config.email.from,
-    to,
-    subject,
-    text,
-    html,
-  });
-
-  const preview = nodemailer.getTestMessageUrl(info);
-  if (preview) console.log('[mailer] Preview the email here:', preview);
-
-  return info;
+  return sendEmail({ to, subject, text, html });
 }
 
 module.exports = { sendVerificationEmail, sendResetPasswordEmail, sendInviteEmail };
