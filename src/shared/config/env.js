@@ -16,16 +16,62 @@ require('dotenv').config({ quiet: true });
 
 const nodeEnv = process.env.NODE_ENV || 'development';
 
+/**
+ * Returns the first name that is actually set to a non-empty value.
+ *
+ * Several variables have two accepted names: the one the hosting platforms are
+ * configured with (MONGODB_URI, FRONTEND_URL, SMTP_*) and the one this codebase
+ * and every existing local .env already use (MONGO_URI, CLIENT_URL, EMAIL_*).
+ * Accepting both means a deploy and a laptop can disagree about the name without
+ * either one breaking, and the test suites keep running untouched.
+ *
+ * The platform name is listed FIRST at every call site, so it wins where both exist.
+ *
+ * @param {...string} names Env var names, most-preferred first.
+ * @returns {string|undefined} The first non-empty value, or undefined if none are set.
+ */
+function pickEnv(...names) {
+  for (const name of names) {
+    const value = process.env[name];
+    if (value !== undefined && value !== '') return value;
+  }
+  return undefined;
+}
+
 const config = {
   // --- Server ---
   nodeEnv,
   isProduction: nodeEnv === 'production',
   port: Number(process.env.PORT) || 5000,
 
+  // The interface to bind. Render (and most container hosts) route traffic to the
+  // container's external interface, so a server bound to loopback is unreachable and
+  // the deploy fails its health check with no error in the logs. 0.0.0.0 is the only
+  // safe default there; HOST stays overridable for anyone who needs to narrow it.
+  host: process.env.HOST || '0.0.0.0',
+
   // --- Database ---
   // No default on purpose: a wrong/placeholder DB URI silently connecting to the
   // wrong place is worse than failing loudly. server.js checks this is present.
-  mongoUri: process.env.MONGO_URI,
+  mongoUri: pickEnv('MONGODB_URI', 'MONGO_URI'),
+
+  mongo: {
+    // Atlas M0 clusters idle down, so the first connection after a quiet period can
+    // take several seconds. Mongoose's 30s driver default is fine, but being explicit
+    // documents the intent and keeps a genuinely unreachable cluster from hanging a
+    // cold start for the full default.
+    serverSelectionTimeoutMS: Number(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS) || 15_000,
+    socketTimeoutMS: Number(process.env.MONGO_SOCKET_TIMEOUT_MS) || 45_000,
+
+    // M0 allows 500 connections cluster-wide. A small pool leaves room for the shell,
+    // Compass, and a second instance during a rolling deploy.
+    maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE) || 10,
+
+    // How many times to retry the INITIAL connect before giving up and exiting. A free
+    // instance and a sleeping M0 waking at the same time is the common case this covers.
+    connectRetries: Number(process.env.MONGO_CONNECT_RETRIES) || 3,
+    connectRetryDelayMs: Number(process.env.MONGO_CONNECT_RETRY_DELAY_MS) || 2_000,
+  },
 
   // OPTIONAL. Some networks' default DNS refuse the SRV lookup that a
   // `mongodb+srv://` URI needs. If set (comma-separated, e.g. "8.8.8.8,1.1.1.1"),
@@ -65,14 +111,22 @@ const config = {
     expiresIn: process.env.RESET_TOKEN_EXPIRES_IN || '15m',
   },
 
-  // --- Email (SMTP). All optional in dev: if host is missing we fall back to a
+  // --- Email (SMTP fallback). All optional in dev: if host is missing we fall back to a
   // Nodemailer "Ethereal" test inbox and always log the OTP to the console. ---
   email: {
-    host: process.env.EMAIL_HOST,
-    port: Number(process.env.EMAIL_PORT) || 587,
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-    from: process.env.EMAIL_FROM || 'ValuiQ <no-reply@valuiq.com>',
+    host: pickEnv('SMTP_HOST', 'EMAIL_HOST'),
+    port: Number(pickEnv('SMTP_PORT', 'EMAIL_PORT')) || 587,
+    user: pickEnv('SMTP_USER', 'EMAIL_USER'),
+    pass: pickEnv('SMTP_PASS', 'EMAIL_PASS'),
+    from: pickEnv('SMTP_FROM', 'EMAIL_FROM') || 'ValuiQ <no-reply@valuiq.com>',
+  },
+
+  // --- Email (Resend, the primary transport) ---
+  // Unset means "no Resend", which is a supported way to run: sendEmail() then goes
+  // straight to SMTP, and failing that to Ethereal in dev. Same optional-dependency
+  // shape as Redis below — a missing key degrades the transport, it does not break send.
+  resend: {
+    apiKey: process.env.RESEND_API_KEY,
   },
 
   // --- Redis (Week 4: fairness timers + cross-instance pub/sub) ---
@@ -80,7 +134,12 @@ const config = {
   // timers fall back to the database sweep and pub/sub falls back to in-process emit. A
   // default of localhost:6379 would turn a missing config into a connection error storm on
   // every machine that does not happen to be running Redis.
-  redisUrl: process.env.REDIS_URL,
+  //
+  // In production this is an Upstash `rediss://` TCP URL, NOT the REST endpoint. BullMQ's
+  // blocking commands and the pub/sub in shared/events/bus.js both need a real socket;
+  // the Upstash REST API is request/response only and can serve neither. Upstash exposes
+  // both on the same free database — take the one labelled for redis-cli/ioredis.
+  redisUrl: pickEnv('REDIS_URL', 'UPSTASH_REDIS_URL'),
 
   // --- Fairness timer (Week 4 moderation) ---
   fairness: {
@@ -110,8 +169,11 @@ const config = {
     sweepIntervalSeconds: Number(process.env.FAIRNESS_SWEEP_INTERVAL_SECONDS) || 60,
   },
 
-  // --- Client (used later for CORS / links in emails) ---
-  clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
+  // --- Client (CORS allowlist + links in emails) ---
+  // May be a single origin or a comma-separated list. The localhost default is a DEV
+  // convenience only — app.js refuses to fall back to it in production, because an API
+  // that silently trusts localhost in prod is an allowlist that isn't one.
+  clientUrl: pickEnv('FRONTEND_URL', 'CLIENT_URL') || 'http://localhost:5173',
 };
 
 module.exports = config;
