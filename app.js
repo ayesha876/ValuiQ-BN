@@ -10,6 +10,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 
 const config = require('./src/shared/config/env');
+const { getAllowedOrigins } = require('./src/shared/config/corsOrigins');
 const authRoutes = require('./src/modules/auth/auth.routes');
 const eventRoutes = require('./src/modules/events/event.routes');
 const { arenaRoutes, feedRoutes, postRoutes } = require('./src/modules/posts/post.routes');
@@ -31,21 +32,19 @@ const app = express();
 // Security-related HTTP headers (sane defaults).
 app.use(helmet());
 
-// Let the frontend call this API from the browser. CLIENT_URL may be a single
-// origin or a comma-separated list (e.g. the Vite dev server on :5173 and its
-// automatic :5174 fallback, plus a staging URL later). Requests with no Origin
+// Let the frontend call this API from the browser. FRONTEND_URL (legacy: CLIENT_URL)
+// may be a single origin or a comma-separated list (e.g. the Vite dev server on :5173
+// and its automatic :5174 fallback, plus a staging URL later). Requests with no Origin
 // header (curl, Postman, server-to-server, health checks) are allowed through.
 // `credentials: true` permits cookies/Authorization headers on cross-origin
 // calls — and requires an explicit origin (never '*'), which the allowlist gives.
-const allowedOrigins = config.clientUrl
-  .split(',')
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+// The list itself, including the production localhost rule, comes from corsOrigins.js.
+const corsOrigins = getAllowedOrigins();
 
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      if (!origin || corsOrigins.includes(origin)) return callback(null, true);
       return callback(new Error(`CORS blocked for origin: ${origin}`));
     },
     credentials: true,
@@ -59,7 +58,17 @@ app.use(express.json({ limit: '16kb' }));
 // Concise request logs — dev only, to keep production logs clean.
 if (!config.isProduction) app.use(morgan('dev'));
 
-// Simple health check so you can confirm the server is up during testing.
+// Platform health check. Render polls this path to decide whether a deploy went live and
+// whether to keep routing to the instance, so it is mounted at the ROOT, before auth and
+// before anything that touches the database: it must answer while the app is otherwise
+// busy, and it must never depend on a downstream service whose outage would then be
+// escalated into "the deploy failed". A flat 200 with a fixed body is the whole contract.
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// The original health check, kept at its old path so anything already pointed at it
+// (Postman collections, the e2e scripts) keeps working.
 app.get('/api/health', (req, res) => {
   res.json({ success: true, message: 'ValuiQ API is running.' });
 });

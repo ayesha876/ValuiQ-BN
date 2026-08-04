@@ -16,6 +16,7 @@
  */
 const { Server } = require('socket.io');
 const config = require('../shared/config/env');
+const { getAllowedOrigins } = require('../shared/config/corsOrigins');
 const { roomForEvent } = require('./rooms');
 const { resolveHandshake, SocketAuthError } = require('./socketAuth');
 const { joinControlRoom, controlRoomFor } = require('./events/moderation.socket');
@@ -25,14 +26,12 @@ let io = null;
 /**
  * Attach Socket.IO to the HTTP server.
  *
- * CORS uses the same allowlist as the REST API (`CLIENT_URL`, comma-separated) rather than a
- * second list — one place to add an origin, and no chance of the two disagreeing.
+ * CORS uses the same allowlist as the REST API (`FRONTEND_URL`, comma-separated) rather than a
+ * second list — one place to add an origin, and no chance of the two disagreeing. That shared
+ * source is shared/config/corsOrigins.js, which also drops localhost in production.
  */
 function initSockets(httpServer) {
-  const allowedOrigins = config.clientUrl
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+  const allowedOrigins = getAllowedOrigins();
 
   io = new Server(httpServer, {
     cors: { origin: allowedOrigins, credentials: true },
